@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#0f0f23">
+  <title>💎 消消乐</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <div class="container">
+    <!-- 标题 -->
+    <h1 class="title">💎 消消乐</h1>
+
+    <!-- 状态栏 -->
+    <div class="stats">
+      <div class="stat-item">
+        <span class="stat-label">关卡</span>
+        <span class="stat-value" id="levelNum">1</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">分数</span>
+        <span class="stat-value" id="scoreNum">0</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">目标</span>
+        <span class="stat-value" id="targetNum">500</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">步数</span>
+        <span class="stat-value moves" id="movesNum">20</span>
+      </div>
+    </div>
+
+    <!-- 游戏画布 -->
+    <canvas id="gameCanvas"></canvas>
+
+    <!-- 按钮 -->
+    <div class="buttons">
+      <button class="btn" id="btnRestart">🔄 重新开始</button>
+      <button class="btn btn-secondary" id="btnShuffle">🔀 洗牌</button>
+    </div>
+
+    <!-- 提示文字 -->
+    <p class="hint">👆 点击选中宝石，再点相邻宝石交换</p>
+  </div>
+
+  <!-- 过关弹窗 -->
+  <div class="overlay" id="winOverlay">
+    <div class="overlay-box win">
+      <div class="overlay-emoji">🎉</div>
+      <h2>恭喜过关！</h2>
+      <p>第 <span id="winLevel"></span> 关完成</p>
+      <p>得分：<strong id="winScore"></strong></p>
+      <button class="btn btn-primary" id="btnNextLevel">▶ 下一关</button>
+      <button class="btn btn-secondary" id="btnRestartFromWin">🔄 重新开始</button>
+    </div>
+  </div>
+
+  <!-- 失败弹窗 -->
+  <div class="overlay" id="loseOverlay">
+    <div class="overlay-box lose">
+      <div class="overlay-emoji">😢</div>
+      <h2>步数用完啦</h2>
+      <p>得分：<strong id="loseScore"></strong></p>
+      <p>目标：<strong id="loseTarget"></strong></p>
+      <button class="btn btn-primary" id="btnRetry">🔄 再试一次</button>
+    </div>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>
