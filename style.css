@@ -93,6 +93,7 @@ body {
   border-radius: 16px;
   cursor: pointer;
   max-width: 100%;
+  touch-action: none;   /* 禁止浏览器手势，消除触屏延迟 */
 }
 
 /* ---------- 按钮 ---------- */

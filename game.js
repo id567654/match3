@@ -7,19 +7,13 @@
 const COLS = 8;                // 棋盘列数
 const ROWS = 8;                // 棋盘行数
 const GEM_TYPES = 6;           // 宝石种类数
-const GEM_COLORS = [           // 宝石颜色
-  '#FF4757',  // 红
-  '#FF6B35',  // 橙
-  '#FFD93D',  // 黄
-  '#6BCB77',  // 绿
-  '#4D96FF',  // 蓝
-  '#9B59B6',  // 紫
-];
-const GEM_LIGHT = [            // 宝石高光色
-  '#FF7A85', '#FF9B75', '#FFE87A', '#8EECA0', '#7DB5FF', '#BB7FD6',
-];
-const GEM_DARK = [             // 宝石暗面色
-  '#CC1A2E', '#CC4A1A', '#CCA620', '#3D8C4A', '#1A5ECC', '#6B1D8C',
+const GEM_COLORS = [           // 宝石底色（清晰饱和，不晕）
+  '#E85D75',  // 红
+  '#F48C3C',  // 橙
+  '#F2C94C',  // 黄
+  '#4CAF50',  // 绿
+  '#3B8EFF',  // 蓝
+  '#8E5FD3',  // 紫
 ];
 
 // ==================== 游戏状态 ====================
@@ -45,6 +39,11 @@ let floatingTexts = [];
 let canvas, ctx;
 let cellSize;              // 每格像素大小
 let boardLeft, boardTop;   // 棋盘左上角坐标（棋盘会内边距居中）
+
+// 预渲染缓存（性能优化关键：把渐变/阴影提前画好，之后只贴图）
+let gemCache = {};         // { type: offscreenCanvas } 每种颜色宝石预渲染一份
+let boardBgCache = null;   // 棋盘背景预渲染
+let needsRender = true;    // 脏标记：有动画时才重绘
 
 // ==================== 音效系统 ====================
 let audioCtx = null;
@@ -101,8 +100,9 @@ function resizeCanvas() {
   boardLeft = 4;
   boardTop = 4;
 
-  const dpr = window.devicePixelRatio || 1;
-  const canvasW = boardSize + 8;   // 棋盘 + 边距
+  // 限制 DPR 最大 2，减少低端机 GPU 负担
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const canvasW = boardSize + 8;
   const canvasH = boardSize + 8;
 
   canvas.style.width = canvasW + 'px';
@@ -110,6 +110,107 @@ function resizeCanvas() {
   canvas.width = canvasW * dpr;
   canvas.height = canvasH * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  // 尺寸变了，重建预渲染缓存
+  buildGemCache();
+  buildBoardBgCache();
+}
+
+// ---- 预渲染：扁平方块宝石 + 每色独特图标，避免 3D 球体头晕 ----
+function roundedRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+// ---- 预渲染：纯色圆角方形，清晰不糊 ----
+function buildGemCache() {
+  gemCache = {};
+  const size = cellSize;
+  if (size <= 0) return;
+
+  const margin = size * 0.08;
+  const cornerR = size * 0.15;
+
+  for (let type = 0; type < GEM_TYPES; type++) {
+    const off = document.createElement('canvas');
+    off.width = size;
+    off.height = size;
+    const oc = off.getContext('2d');
+    const color = GEM_COLORS[type];
+
+    // 纯色填充 — 无渐变，不糊
+    oc.fillStyle = color;
+    roundedRect(oc, margin, margin, size - margin * 2, size - margin * 2, cornerR);
+    oc.fill();
+
+    // 深色清晰描边
+    const darker = darken(color, 0.2);
+    oc.strokeStyle = darker;
+    oc.lineWidth = Math.max(1.5, size * 0.05);
+    roundedRect(oc, margin, margin, size - margin * 2, size - margin * 2, cornerR);
+    oc.stroke();
+
+    gemCache[type] = off;
+  }
+}
+
+// 颜色加深工具
+function darken(hex, amount) {
+  const num = parseInt(hex.slice(1), 16);
+  const r = Math.floor(((num >> 16) & 0xFF) * (1 - amount));
+  const g = Math.floor(((num >> 8) & 0xFF) * (1 - amount));
+  const b = Math.floor((num & 0xFF) * (1 - amount));
+  return '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
+}
+
+// ---- 预渲染：棋盘背景 ----
+function buildBoardBgCache() {
+  const size = cellSize * COLS;
+  if (size <= 0) return;
+
+  boardBgCache = document.createElement('canvas');
+  boardBgCache.width = size + 8;
+  boardBgCache.height = size + 8;
+  const bc = boardBgCache.getContext('2d');
+
+  const radius = cellSize * 0.3;
+  bc.fillStyle = '#1a1a2e';
+  bc.beginPath();
+  bc.moveTo(4 + radius, 4);
+  bc.lineTo(4 + size - radius, 4);
+  bc.quadraticCurveTo(4 + size, 4, 4 + size, 4 + radius);
+  bc.lineTo(4 + size, 4 + size - radius);
+  bc.quadraticCurveTo(4 + size, 4 + size, 4 + size - radius, 4 + size);
+  bc.lineTo(4 + radius, 4 + size);
+  bc.quadraticCurveTo(4, 4 + size, 4, 4 + size - radius);
+  bc.lineTo(4, 4 + radius);
+  bc.quadraticCurveTo(4, 4, 4 + radius, 4);
+  bc.fill();
+
+  // 网格线
+  bc.strokeStyle = 'rgba(255,255,255,0.04)';
+  bc.lineWidth = 1;
+  for (let r = 1; r < ROWS; r++) {
+    bc.beginPath();
+    bc.moveTo(4, 4 + r * cellSize);
+    bc.lineTo(4 + size, 4 + r * cellSize);
+    bc.stroke();
+  }
+  for (let c = 1; c < COLS; c++) {
+    bc.beginPath();
+    bc.moveTo(4 + c * cellSize, 4);
+    bc.lineTo(4 + c * cellSize, 4 + size);
+    bc.stroke();
+  }
 }
 
 // ==================== 宝石对象 ====================
@@ -441,95 +542,25 @@ function updateParticles() {
   floatingTexts = floatingTexts.filter(ft => ft.life > 0);
 }
 
-// ==================== 渲染 ====================
+// ==================== 渲染（贴图版 — 避免每帧算渐变/阴影） ====================
 function drawBoardBackground() {
-  const size = cellSize * COLS;
-  const x = boardLeft;
-  const y = boardTop;
-
-  // 棋盘底色（圆角矩形）
-  const radius = cellSize * 0.3;
-  ctx.fillStyle = '#1a1a2e';
-  ctx.shadowColor = 'rgba(0,0,0,0.5)';
-  ctx.shadowBlur = 12;
-  ctx.shadowOffsetY = 4;
-  ctx.beginPath();
-  ctx.moveTo(x + radius, y);
-  ctx.lineTo(x + size - radius, y);
-  ctx.quadraticCurveTo(x + size, y, x + size, y + radius);
-  ctx.lineTo(x + size, y + size - radius);
-  ctx.quadraticCurveTo(x + size, y + size, x + size - radius, y + size);
-  ctx.lineTo(x + radius, y + size);
-  ctx.quadraticCurveTo(x, y + size, x, y + size - radius);
-  ctx.lineTo(x, y + radius);
-  ctx.quadraticCurveTo(x, y, x + radius, y);
-  ctx.fill();
-  ctx.shadowColor = 'transparent';
-  ctx.shadowBlur = 0;
-  ctx.shadowOffsetY = 0;
-
-  // 网格线
-  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-  ctx.lineWidth = 1;
-  for (let r = 1; r < ROWS; r++) {
-    ctx.beginPath();
-    ctx.moveTo(x, y + r * cellSize);
-    ctx.lineTo(x + size, y + r * cellSize);
-    ctx.stroke();
-  }
-  for (let c = 1; c < COLS; c++) {
-    ctx.beginPath();
-    ctx.moveTo(x + c * cellSize, y);
-    ctx.lineTo(x + c * cellSize, y + size);
-    ctx.stroke();
+  if (boardBgCache) {
+    ctx.drawImage(boardBgCache, 0, 0);
   }
 }
 
 function drawGem(gem) {
-  if (!gem || gem.opacity <= 0 || gem.scale <= 0) return;
+  if (!gem || gem.opacity <= 0.01 || gem.scale <= 0.01) return;
+  const cached = gemCache[gem.type];
+  if (!cached) return;
 
-  const cx = gem.x;
-  const cy = gem.y;
-  const r = (cellSize / 2 - cellSize * 0.12) * gem.scale;
-  const color = GEM_COLORS[gem.type];
-  const light = GEM_LIGHT[gem.type];
-  const dark = GEM_DARK[gem.type];
-
+  const half = cellSize / 2;
   ctx.save();
   ctx.globalAlpha = gem.opacity;
-
-  // 阴影
-  ctx.shadowColor = 'rgba(0,0,0,0.3)';
-  ctx.shadowBlur = r * 0.25;
-  ctx.shadowOffsetX = r * 0.08;
-  ctx.shadowOffsetY = r * 0.12;
-
-  // 主体渐变（模拟 3D 球体）
-  const grad = ctx.createRadialGradient(cx - r * 0.3, cy - r * 0.35, r * 0.05, cx, cy, r);
-  grad.addColorStop(0, light);
-  grad.addColorStop(0.5, color);
-  grad.addColorStop(1, dark);
-
-  ctx.beginPath();
-  ctx.arc(cx, cy, r, 0, Math.PI * 2);
-  ctx.fillStyle = grad;
-  ctx.fill();
-
-  // 高光点
-  ctx.shadowColor = 'transparent';
-  ctx.shadowBlur = 0;
-  ctx.shadowOffsetX = 0;
-  ctx.shadowOffsetY = 0;
-
-  const hlGrad = ctx.createRadialGradient(cx - r * 0.25, cy - r * 0.3, 0, cx - r * 0.25, cy - r * 0.3, r * 0.5);
-  hlGrad.addColorStop(0, 'rgba(255,255,255,0.6)');
-  hlGrad.addColorStop(0.5, 'rgba(255,255,255,0.1)');
-  hlGrad.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.beginPath();
-  ctx.arc(cx, cy, r, 0, Math.PI * 2);
-  ctx.fillStyle = hlGrad;
-  ctx.fill();
-
+  ctx.translate(gem.x, gem.y);
+  ctx.scale(gem.scale, gem.scale);
+  // 贴预渲染好的宝石图（从中心对齐）
+  ctx.drawImage(cached, -half, -half, cellSize, cellSize);
   ctx.restore();
 }
 
@@ -540,21 +571,16 @@ function drawSelection() {
   const gem = board[selectedRow][selectedCol];
   const cx = gem.x;
   const cy = gem.y;
-  const r = cellSize / 2 - 1;
+  const half = cellSize / 2;
 
-  // 脉冲动画
-  const pulse = Math.sin(performance.now() / 300) * 0.15 + 0.85;
-  const borderR = r + 4 + pulse * 2;
+  // 简洁白色圆角边框 + 微弱呼吸感（极慢脉冲，不刺眼）
+  const pulse = Math.sin(performance.now() / 600) * 0.06 + 1;
+  const r = half + 3;
 
-  ctx.strokeStyle = `rgba(255, 215, 0, ${0.6 + pulse * 0.4})`;
-  ctx.lineWidth = 3;
-  ctx.shadowColor = 'rgba(255, 215, 0, 0.6)';
-  ctx.shadowBlur = 8;
-  ctx.beginPath();
-  ctx.arc(cx, cy, borderR, 0, Math.PI * 2);
+  ctx.strokeStyle = `rgba(255, 255, 255, ${0.7 + (pulse - 1) * 3})`;
+  ctx.lineWidth = 3 * pulse;
+  roundedRect(ctx, cx - r, cy - r, r * 2, r * 2, cellSize * 0.22);
   ctx.stroke();
-  ctx.shadowColor = 'transparent';
-  ctx.shadowBlur = 0;
 }
 
 function drawParticles() {
@@ -581,7 +607,9 @@ function drawParticles() {
 }
 
 function render() {
-  ctx.clearRect(0, 0, canvas.width / (window.devicePixelRatio || 1), canvas.height / (window.devicePixelRatio || 1));
+  const w = canvas.width / (window.devicePixelRatio || 1);
+  const h = canvas.height / (window.devicePixelRatio || 1);
+  ctx.clearRect(0, 0, w, h);
 
   drawBoardBackground();
 
@@ -598,10 +626,24 @@ function render() {
   drawParticles();
 }
 
-// ==================== 游戏主循环 ====================
-function gameLoop() {
+// ==================== 游戏主循环（自适应帧率） ====================
+// 活跃时 60fps，空闲时降至 4fps，避免手机持续高负载发烫
+const ACTIVE_FPS = 60;
+const IDLE_FPS = 4;
+let lastRenderTime = 0;
+
+function gameLoop(timestamp) {
   updateParticles();
-  render();
+
+  const isActive = isProcessing || particles.length > 0 || floatingTexts.length > 0 || selectedRow >= 0;
+  const minInterval = 1000 / (isActive ? ACTIVE_FPS : IDLE_FPS);
+  const elapsed = timestamp - lastRenderTime;
+
+  if (elapsed >= minInterval) {
+    render();
+    lastRenderTime = timestamp;
+  }
+
   requestAnimationFrame(gameLoop);
 }
 
@@ -879,23 +921,20 @@ function updateUI() {
 }
 
 // ==================== 输入处理 ====================
+let lastInputTime = 0;
+
 function getCanvasPos(e) {
   const rect = canvas.getBoundingClientRect();
-  const scaleX = (canvas.width / (window.devicePixelRatio || 1)) / rect.width;
-  const scaleY = (canvas.height / (window.devicePixelRatio || 1)) / rect.height;
+  const logicalW = canvas.width / (window.devicePixelRatio || 1);
+  const logicalH = canvas.height / (window.devicePixelRatio || 1);
 
-  let clientX, clientY;
-  if (e.touches) {
-    clientX = e.touches[0].clientX;
-    clientY = e.touches[0].clientY;
-  } else {
-    clientX = e.clientX;
-    clientY = e.clientY;
-  }
+  // pointerdown 直接用 clientX/Y；touchstart 从 touches 数组取
+  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
 
   return {
-    x: (clientX - rect.left) * scaleX,
-    y: (clientY - rect.top) * scaleY,
+    x: ((clientX - rect.left) / rect.width) * logicalW,
+    y: ((clientY - rect.top) / rect.height) * logicalH,
   };
 }
 
@@ -910,6 +949,11 @@ function getGemAtPos(pos) {
 
 function onCanvasDown(e) {
   e.preventDefault();
+  // 防连点：同一帧内忽略重复事件（pointerdown + touchstart 可能同时触发）
+  const now = Date.now();
+  if (now - lastInputTime < 150) return;
+  lastInputTime = now;
+
   const pos = getCanvasPos(e);
   const gem = getGemAtPos(pos);
   if (gem) {
@@ -944,11 +988,17 @@ function init() {
   setupCanvas();
   initAudio();
 
-  // 事件监听
-  canvas.addEventListener('mousedown', onCanvasDown);
-  canvas.addEventListener('touchstart', onCanvasDown, { passive: false });
-  // 阻止移动端长按菜单
+  // 事件监听：pointerdown 统一处理鼠标+触屏，无 300ms 延迟
+  // 老旧浏览器降级用 touchstart
+  if (window.PointerEvent) {
+    canvas.addEventListener('pointerdown', onCanvasDown);
+  } else {
+    canvas.addEventListener('mousedown', onCanvasDown);
+    canvas.addEventListener('touchstart', onCanvasDown, { passive: false });
+  }
+  // 阻止移动端长按菜单 & 拖拽选中的奇怪行为
   canvas.addEventListener('contextmenu', e => e.preventDefault());
+  canvas.addEventListener('selectstart', e => e.preventDefault());
 
   // 按钮绑定
   document.getElementById('btnRestart').addEventListener('click', restartGame);
