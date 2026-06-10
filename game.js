@@ -39,6 +39,7 @@ let floatingTexts = [];
 let canvas, ctx;
 let cellSize;              // 每格像素大小
 let boardLeft, boardTop;   // 棋盘左上角坐标（棋盘会内边距居中）
+let displayDPI = 1;        // 统一使用的设备像素比（上限 2）
 
 // 预渲染缓存（性能优化关键：把渐变/阴影提前画好，之后只贴图）
 let gemCache = {};         // { type: offscreenCanvas } 每种颜色宝石预渲染一份
@@ -101,15 +102,15 @@ function resizeCanvas() {
   boardTop = 4;
 
   // 限制 DPR 最大 2，减少低端机 GPU 负担
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  displayDPI = Math.min(window.devicePixelRatio || 1, 2);
   const canvasW = boardSize + 8;
   const canvasH = boardSize + 8;
 
   canvas.style.width = canvasW + 'px';
   canvas.style.height = canvasH + 'px';
-  canvas.width = canvasW * dpr;
-  canvas.height = canvasH * dpr;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  canvas.width = canvasW * displayDPI;
+  canvas.height = canvasH * displayDPI;
+  ctx.setTransform(displayDPI, 0, 0, displayDPI, 0, 0);
 
   // 尺寸变了，重建预渲染缓存
   buildGemCache();
@@ -607,8 +608,8 @@ function drawParticles() {
 }
 
 function render() {
-  const w = canvas.width / (window.devicePixelRatio || 1);
-  const h = canvas.height / (window.devicePixelRatio || 1);
+  const w = canvas.width / displayDPI;
+  const h = canvas.height / displayDPI;
   ctx.clearRect(0, 0, w, h);
 
   drawBoardBackground();
@@ -925,8 +926,9 @@ let lastInputTime = 0;
 
 function getCanvasPos(e) {
   const rect = canvas.getBoundingClientRect();
-  const logicalW = canvas.width / (window.devicePixelRatio || 1);
-  const logicalH = canvas.height / (window.devicePixelRatio || 1);
+  // 使用与 resizeCanvas 一致的 DPR，避免坐标计算偏差
+  const logicalW = canvas.width / displayDPI;
+  const logicalH = canvas.height / displayDPI;
 
   // pointerdown 直接用 clientX/Y；touchstart 从 touches 数组取
   const clientX = e.touches ? e.touches[0].clientX : e.clientX;
