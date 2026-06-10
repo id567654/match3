@@ -7,13 +7,13 @@
 const COLS = 8;                // 棋盘列数
 const ROWS = 8;                // 棋盘行数
 const GEM_TYPES = 6;           // 宝石种类数
-const GEM_COLORS = [           // 宝石底色（清晰饱和，不晕）
-  '#E85D75',  // 红
-  '#F48C3C',  // 橙
-  '#F2C94C',  // 黄
-  '#4CAF50',  // 绿
+const GEM_COLORS = [           // 球体宝石配色（鲜艳饱满）
+  '#FF3B5C',  // 红
+  '#FF8C42',  // 橙
+  '#FFD740',  // 黄
+  '#43D964',  // 绿
   '#3B8EFF',  // 蓝
-  '#8E5FD3',  // 紫
+  '#A855F7',  // 紫
 ];
 
 // ==================== 游戏状态 ====================
@@ -132,36 +132,61 @@ function roundedRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-// ---- 预渲染：纯色圆角方形，清晰不糊 ----
+// ---- 预渲染：3D 球体宝石（渐变只算一次，运行时纯贴图） ----
 function buildGemCache() {
   gemCache = {};
   const size = cellSize;
   if (size <= 0) return;
-
-  const margin = size * 0.08;
-  const cornerR = size * 0.15;
 
   for (let type = 0; type < GEM_TYPES; type++) {
     const off = document.createElement('canvas');
     off.width = size;
     off.height = size;
     const oc = off.getContext('2d');
+
+    const cx = size / 2, cy = size / 2;
+    const r = size * 0.42;  // 球半径，留一点间距
+
     const color = GEM_COLORS[type];
 
-    // 纯色填充 — 无渐变，不糊
-    oc.fillStyle = color;
-    roundedRect(oc, margin, margin, size - margin * 2, size - margin * 2, cornerR);
+    // 球体径向渐变（中心偏左上，模拟光源）
+    const grad = oc.createRadialGradient(
+      cx - r * 0.3, cy - r * 0.35, r * 0.05,
+      cx, cy, r
+    );
+    grad.addColorStop(0, lighten(color, 0.3));   // 高光
+    grad.addColorStop(0.45, color);               // 本色
+    grad.addColorStop(1, darken(color, 0.35));    // 暗面
+
+    oc.beginPath();
+    oc.arc(cx, cy, r, 0, Math.PI * 2);
+    oc.fillStyle = grad;
     oc.fill();
 
-    // 深色清晰描边
-    const darker = darken(color, 0.2);
-    oc.strokeStyle = darker;
-    oc.lineWidth = Math.max(1.5, size * 0.05);
-    roundedRect(oc, margin, margin, size - margin * 2, size - margin * 2, cornerR);
-    oc.stroke();
+    // 高光小白点
+    const hl = oc.createRadialGradient(
+      cx - r * 0.25, cy - r * 0.3, 0,
+      cx - r * 0.25, cy - r * 0.3, r * 0.45
+    );
+    hl.addColorStop(0, 'rgba(255,255,255,0.55)');
+    hl.addColorStop(0.5, 'rgba(255,255,255,0.06)');
+    hl.addColorStop(1, 'rgba(255,255,255,0)');
+    oc.beginPath();
+    oc.arc(cx, cy, r, 0, Math.PI * 2);
+    oc.fillStyle = hl;
+    oc.fill();
 
     gemCache[type] = off;
   }
+}
+
+// 颜色变亮
+function lighten(hex, amount) {
+  const num = parseInt(hex.slice(1), 16);
+  const r = Math.min(255, Math.floor(((num >> 16) & 0xFF) * (1 + amount)));
+  const g = Math.min(255, Math.floor(((num >> 8) & 0xFF) * (1 + amount)));
+  const b = Math.min(255, Math.floor((num & 0xFF) * (1 + amount)));
+  return '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
 }
 
 // 颜色加深工具
@@ -572,15 +597,15 @@ function drawSelection() {
   const gem = board[selectedRow][selectedCol];
   const cx = gem.x;
   const cy = gem.y;
-  const half = cellSize / 2;
+  const r = cellSize * 0.42 + 3;
 
-  // 简洁白色圆角边框 + 微弱呼吸感（极慢脉冲，不刺眼）
+  // 柔和白色圆环 + 微弱呼吸感
   const pulse = Math.sin(performance.now() / 600) * 0.06 + 1;
-  const r = half + 3;
 
   ctx.strokeStyle = `rgba(255, 255, 255, ${0.7 + (pulse - 1) * 3})`;
   ctx.lineWidth = 3 * pulse;
-  roundedRect(ctx, cx - r, cy - r, r * 2, r * 2, cellSize * 0.22);
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
   ctx.stroke();
 }
 
@@ -922,15 +947,14 @@ function updateUI() {
 }
 
 // ==================== 输入处理 ====================
-let lastInputTime = 0;
+// 三事件监听 + 去重：覆盖所有安卓机型的触屏行为差异
+let lastEventId = 0;
 
 function getCanvasPos(e) {
   const rect = canvas.getBoundingClientRect();
-  // 使用与 resizeCanvas 一致的 DPR，避免坐标计算偏差
   const logicalW = canvas.width / displayDPI;
   const logicalH = canvas.height / displayDPI;
 
-  // pointerdown 直接用 clientX/Y；touchstart 从 touches 数组取
   const clientX = e.touches ? e.touches[0].clientX : e.clientX;
   const clientY = e.touches ? e.touches[0].clientY : e.clientY;
 
@@ -950,11 +974,15 @@ function getGemAtPos(pos) {
 }
 
 function onCanvasDown(e) {
+  // 阻止浏览器默认行为（滚动、缩放、长按菜单）
   e.preventDefault();
-  // 防连点：同一帧内忽略重复事件（pointerdown + touchstart 可能同时触发）
-  const now = Date.now();
-  if (now - lastInputTime < 150) return;
-  lastInputTime = now;
+  e.stopPropagation();
+
+  // 去重：pointerdown / touchstart / mousedown 可能同时触发，
+  // 用 50ms 窗口过滤重复事件
+  const eventId = Math.round(e.timeStamp / 50);
+  if (eventId === lastEventId) return;
+  lastEventId = eventId;
 
   const pos = getCanvasPos(e);
   const gem = getGemAtPos(pos);
@@ -990,15 +1018,12 @@ function init() {
   setupCanvas();
   initAudio();
 
-  // 事件监听：pointerdown 统一处理鼠标+触屏，无 300ms 延迟
-  // 老旧浏览器降级用 touchstart
-  if (window.PointerEvent) {
-    canvas.addEventListener('pointerdown', onCanvasDown);
-  } else {
-    canvas.addEventListener('mousedown', onCanvasDown);
-    canvas.addEventListener('touchstart', onCanvasDown, { passive: false });
-  }
-  // 阻止移动端长按菜单 & 拖拽选中的奇怪行为
+  // 三路事件监听：覆盖所有安卓机型的触屏行为差异
+  // pointerdown = 现代标准；touchstart = 旧式安卓保底；mousedown = 桌面
+  canvas.addEventListener('pointerdown', onCanvasDown);
+  canvas.addEventListener('touchstart', onCanvasDown, { passive: false });
+  canvas.addEventListener('mousedown', onCanvasDown);
+  // 阻止移动端长按菜单 & 拖拽选中
   canvas.addEventListener('contextmenu', e => e.preventDefault());
   canvas.addEventListener('selectstart', e => e.preventDefault());
 
